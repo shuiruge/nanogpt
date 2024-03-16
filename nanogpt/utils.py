@@ -200,6 +200,9 @@ class ResBlockWrapper(tf.Module):
   hide the layer-normalization, which contains information that we may want to
   explore. So, we implement it as a callable class instead.
 
+  It inherits `tf.Module` since it is the most basic class in TensorFlow that
+  helps automatically collect variables.
+
   Args:
     fn: Callable[tf.Tensor, [tf.Tensor]]
       Input and output shall share the same shape and dtype.
