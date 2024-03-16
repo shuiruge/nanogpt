@@ -193,7 +193,7 @@ class FeedForward(Layer):
     return self.output_layer(x)
 
 
-class ResBlockWrapper(Layer):
+class ResBlockWrapper(tf.Module):
   """A decorator class for ResNet block.
 
   It can be implemented by closure, like any other decorator. But, closure may
@@ -208,7 +208,6 @@ class ResBlockWrapper(Layer):
   def __init__(self, fn, **kwargs):
     super().__init__(**kwargs)
     self.fn = fn
-
     self.layer_norm = LayerNormalization()
 
   def __call__(self, x):
