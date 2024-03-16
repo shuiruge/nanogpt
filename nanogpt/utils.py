@@ -241,9 +241,20 @@ class CharacterTokenizer:
   Args:
     corpus: str
       The corpus for generating vocabulary.
+    placeholders: List[str]
+      The placeholders for, e.g. masking, padding, etc. These placeholders are
+      appended to the vocabulary. For example, you may use placeholder 'MASK'
+      for masking. Defaults to None.
   """  
-  def __init__(self, corpus):
+  def __init__(self, corpus, placeholders=None):
+    self.corpus = corpus
+    self.placeholders = placeholders
+    
     self.vocab = sorted(list(set(corpus)))
+    if placeholders is not None:
+      # Append the placeholders to the tail, without changing the order of
+      # elements in placeholders.
+      self.vocab += placeholders
     self.vocab_size = len(self.vocab)
 
     self.ctoi = {c: i for i, c in enumerate(self.vocab)}
