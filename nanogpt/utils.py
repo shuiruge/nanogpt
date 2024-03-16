@@ -282,7 +282,7 @@ class LanguageModelDataGenerator:
   """
   
   def __init__(self, token_ids):
-    self.token_ids = np.asarray(token_ids, dtype='int32')
+    self.token_ids = np.asarray(token_ids, dtype='int64')
     self.offset = 0
 
   def __call__(self, seq_len, auto_reset):
