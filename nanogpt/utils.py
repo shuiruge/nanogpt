@@ -193,8 +193,8 @@ class FeedForward(Layer):
     return self.output_layer(x)
 
 
-class ResBlockWrapper(tf.Module):
-  """A decorator class for ResNet block.
+class ResidualBlockWrapper(tf.Module):
+  """A decorator class for residual block.
 
   It can be implemented by closure, like any other decorator. But, closure may
   hide the layer-normalization, which contains information that we may want to
@@ -208,11 +208,12 @@ class ResBlockWrapper(tf.Module):
       Input and output shall share the same shape and dtype.
   """
 
-  def __init__(self, fn, **kwargs):
-    super().__init__(**kwargs)
+  def __init__(self, fn, name='residual_block'):
+    super().__init__(name=name)
     self.fn = fn
     self.layer_norm = LayerNormalization()
 
+  @tf.Module.with_name_scope
   def __call__(self, x):
     return x + self.fn(self.layer_norm(x))
 
