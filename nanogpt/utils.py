@@ -1,3 +1,4 @@
+import numpy as np
 import tensorflow as tf
 from keras.layers import Layer, Dense, LayerNormalization, Embedding
 
@@ -54,8 +55,8 @@ def reshape_last_axes(x, shape, num_axes):
   return tf.reshape(x, new_shape)
 
 
-def attention(query, key, value, mask=None):
-  """Calculates the attention weights. Luong-style attention.
+def luong_attention(query, key, value, mask=None):
+  """The Luong-style attention.
 
   The query, key, value must have matching leading dimensions. And the key and
   value must have matching penultimate dimension: seq_len_k == seq_len_v.
@@ -103,13 +104,13 @@ def attention(query, key, value, mask=None):
 
 
 class MultiHeadWrapper:
-  """A wrapper for multi-head operations.
+  """A wrapper for multi-head operations. It splits and concatenates heads.
 
   Examples:
   >>> multi_head = MultiHeadWrapper(8)
   >>> query, key, value = ...
   >>> query = multi_head.split_heads(query)
-  >>> ...
+  >>> ...  # the same goes for key and value.
   >>> output, weights = attention(query, key, value)
   >>> output = multi_head.concat_heads(output)
   
@@ -159,23 +160,17 @@ class MultiHeadWrapper:
     return x
 
 
-class CausalMasker:
-  
-  def __init__(self, seq_len):
-    self.seq_len = seq_len
-  
-  def __call__(self, x):
-    return NotImplemented
-
-
 class FeedForward(Layer):
-  """Feed-forward layers. The hidden layers have ReLU activations. The output
-  layer is linear.
+  """Feed-forward layers.
+  
+  The hidden layers have ReLU activations. The output layer is linear. We also
+  add layer-normalization before the hidden layers, and a residual addition
+  after the output layer.
 
   Args:
     hidden_units: List[int]
     output_dim: int
-    activition: str or Callable[tf.Tensor, [tf.Tensor]]
+    activation: str or Callable[tf.Tensor, [tf.Tensor]]
   """
 
   def __init__(self, hidden_units, output_dim, activation='relu', **kwargs):
@@ -184,42 +179,27 @@ class FeedForward(Layer):
     self.output_dim = output_dim
     self.activation = activation
   
+    self.layer_norm = LayerNormalization()
     self.hidden_layers = [Dense(n, activation) for n in hidden_units]
     self.output_layer = Dense(output_dim)
   
   def call(self, x):
+    y = self.layer_norm(x)
     for layer in self.hidden_layers:
-      x = layer(x)
-    return self.output_layer(x)
+      y = layer(y)
+    y = self.output_layer(y)
+    # Output the residual addition.
+    return x + y
 
 
-class ResidualBlockWrapper(tf.Module):
-  """A decorator class for residual block.
-
-  It can be implemented by closure, like any other decorator. But, closure may
-  hide the layer-normalization, which contains information that we may want to
-  explore. So, we implement it as a callable class instead.
-
-  It inherits `tf.Module` since it is the most basic class in TensorFlow that
-  helps automatically collect variables.
-
-  Args:
-    fn: Callable[tf.Tensor, [tf.Tensor]]
-      Input and output shall share the same shape and dtype.
+class TokPosEmbedding(Layer):
+  """Token embedding + position embedding.
+  
+  The input sequence of token-IDs can be viewed as a sequence of two integers,
+  one for the token-ID itself, and one for its position. For example, the input
+  [23, 51, 11] can be viewed as [(23, 0), (51, 1), (11, 2)], where the second
+  integer in the pairs represents position.
   """
-
-  def __init__(self, fn, name='residual_block'):
-    super().__init__(name=name)
-    self.fn = fn
-    self.layer_norm = LayerNormalization()
-
-  @tf.Module.with_name_scope
-  def __call__(self, x):
-    return x + self.fn(self.layer_norm(x))
-
-
-class Embed(Layer):
-  """Token embedding + position embedding."""
   
   def __init__(self, vocab_size, max_seq_len, embed_dim, **kwargs):
     super().__init__(**kwargs)
@@ -254,9 +234,13 @@ class Embed(Layer):
 
 
 class CharacterTokenizer:
-  """
+  """A simple character level tokenizer. It tokenize a text by its characters.
+  For example, the text 'accb' is tokenized as ['a', 'c', 'c', 'b'], and then
+  converted to token-IDs, like [1, 3, 3, 2].
+
   Args:
     corpus: str
+      The corpus for generating vocabulary.
   """  
   def __init__(self, corpus):
     self.vocab = sorted(list(set(corpus)))
@@ -266,7 +250,64 @@ class CharacterTokenizer:
     self.itoc = {i: c for i, c in enumerate(self.vocab)}
 
   def encode(self, text):
+    """Convert the text to token-IDs.
+
+    Args:
+      text: str
+
+    Returns: List[int]
+    """
     return [self.ctoi[c] for c in text]
   
   def decode(self, token_ids):
+    """Inverse of encode.
+
+    Args:
+      token_ids: List[int]
+
+    Returns: str
+    """
     return ''.join([self.itoc[i] for i in token_ids])
+
+ 
+class LanguageModelDataGenerator:
+  """Generate data for language model.
+
+  The task of a language model is to predict the next token (character, word,
+  or word-piece) based on the previous tokens.
+
+  Args:
+    token_ids: List[int]
+    auto_reset: bool
+  """
+  
+  def __init__(self, token_ids):
+    self.token_ids = np.asarray(token_ids, dtype='int32')
+    self.offset = 0
+
+  def __call__(self, seq_len, auto_reset):
+    """Generates a context and a target.
+
+    Args:
+      seq_len: int
+        The length of the context, as a sequence of token-IDs.
+    
+    Returns: (List[int], int)
+
+    Raises:
+      StopIteration: When `auto_reset = False` and all token-IDs has been
+        emitted.
+    """
+    target_id = self.offset + seq_len
+
+    if target_id >= len(self.token_ids):
+      if auto_reset:
+        self.offset = 0
+        target_id = seq_len
+      else:
+        raise StopIteration()
+
+    contexts = self.token_ids[self.offset:target_id]
+    target = self.token_ids[target_id]
+    self.offset += 1
+    return contexts, target
