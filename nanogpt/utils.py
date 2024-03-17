@@ -163,9 +163,7 @@ class MultiHeadWrapper:
 class FeedForward(Layer):
   """Feed-forward layers.
   
-  The hidden layers have ReLU activations. The output layer is linear. We also
-  add layer-normalization before the hidden layers, and a residual addition
-  after the output layer.
+  The hidden layers have ReLU activations. The output layer is linear.
 
   Args:
     hidden_units: List[int]
@@ -179,17 +177,25 @@ class FeedForward(Layer):
     self.output_dim = output_dim
     self.activation = activation
   
-    self.layer_norm = LayerNormalization()
     self.hidden_layers = [Dense(n, activation) for n in hidden_units]
     self.output_layer = Dense(output_dim)
   
   def call(self, x):
-    y = self.layer_norm(x)
     for layer in self.hidden_layers:
-      y = layer(y)
-    y = self.output_layer(y)
-    # Output the residual addition.
-    return x + y
+      x = layer(x)
+    x = self.output_layer(x)
+    return x
+
+
+class ResNetWrapper(Layer):
+  
+  def __init__(self, module, name='resnet_wrapper', **kwargs):
+    name += '_of_' + module.name
+    super().__init__(name=name, **kwargs)
+    self.module = module
+
+  def call(self, x):
+    return x + self.module(x)
 
 
 class TokPosEmbedding(Layer):

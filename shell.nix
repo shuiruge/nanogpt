@@ -5,6 +5,7 @@ let
   pythonPackages = python3Packages;
 in pkgs.mkShell rec {
   name = "tensorflowEnv";
+  venvDir = "./.venv";
   buildInputs = [
     pythonPackages.python
     pythonPackages.matplotlib
@@ -16,5 +17,6 @@ in pkgs.mkShell rec {
     pythonPackages.jupyter
     pythonPackages.jupyterlab-git
     pythonPackages.tqdm
+    pythonPackages.venvShellHook
   ];
 }
