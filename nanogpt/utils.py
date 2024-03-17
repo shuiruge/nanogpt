@@ -188,14 +188,22 @@ class FeedForward(Layer):
 
 
 class ResNetWrapper(Layer):
+  """x -> x + f(layer_norm(x)), for module f.
+  
+  Args:
+    module: tf.Module
+      Both input and output are tf.Tensor. They share the same shape and dtype.
+  """
   
   def __init__(self, module, name='resnet_wrapper', **kwargs):
     name += '_of_' + module.name
     super().__init__(name=name, **kwargs)
     self.module = module
 
+    self.layer_norm = LayerNormalization()
+
   def call(self, x):
-    return x + self.module(x)
+    return x + self.module(self.layer_norm(x))
 
 
 class TokPosEmbedding(Layer):
