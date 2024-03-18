@@ -56,7 +56,7 @@ def reshape_last_axes(x, shape, num_axes):
 
 
 def luong_attention(query, key, value, mask=None):
-  """The Luong-style attention.
+  """The Luong-style attention, a fast attention implementation.
 
   The query, key, value must have matching leading dimensions. And the key and
   value must have matching penultimate dimension: seq_len_k == seq_len_v.
@@ -160,6 +160,37 @@ class MultiHeadWrapper:
     return x
 
 
+class MultiHeadSelfAttention(Layer):
+  """TODO"""
+
+  def __init__(self, dim, num_heads, **kwargs):
+    super().__init__(**kwargs)
+    self.dim = dim
+    self.num_heads = num_heads
+
+    self.input_linear = Dense(dim, use_bias=False)
+    self.output_linear = Dense(dim, use_bias=False)
+    self.multi_heads = MultiHeadWrapper(num_heads)
+  
+  def call(self, x, mask=None, return_weights=False):
+    query = self.input_linear(x)
+    key = self.input_linear(x)
+    value = self.output_linear(x)
+
+    query = self.multi_heads.split_heads(query)
+    key = self.multi_heads.split_heads(key)
+    value = self.multi_heads.split_heads(value)
+
+    # Mask the self-communication.
+    if mask is None:
+      seq_len = tf.shape(x)[-2]
+      mask = tf.linalg.diag(tf.ones([seq_len]))
+
+    output, attention_weights = luong_attention(query, key, value, mask)
+    output = self.multi_heads.concat_heads(output)
+    return (output, attention_weights) if return_weights else output
+
+
 class FeedForward(Layer):
   """Feed-forward layers.
   
@@ -193,17 +224,40 @@ class ResNetWrapper(Layer):
   Args:
     module: tf.Module
       Both input and output are tf.Tensor. They share the same shape and dtype.
+    TODO
   """
   
-  def __init__(self, module, name='resnet_wrapper', **kwargs):
+  def __init__(self, module, input_arg=0, output_arg=0,
+               name='resnet_wrapper', **kwargs):
     name += '_of_' + module.name
     super().__init__(name=name, **kwargs)
     self.module = module
+    self.input_arg = input_arg
+    self.output_arg = output_arg
 
     self.layer_norm = LayerNormalization()
 
-  def call(self, x):
-    return x + self.module(self.layer_norm(x))
+  def call(self, *args, **kwargs):
+    if self.input_arg + 1 > len(args):
+      raise ValueError()
+    x = args[self.input_arg]
+
+    normed_args = list(args)
+    normed_args[self.input_arg] = self.layer_norm(x)
+
+    outputs = self.module(*normed_args, **kwargs)
+
+    if not isinstance(outputs, (list, tuple)):
+      # Thus, single output.
+      if self.output_arg != 0:
+        raise ValueError()
+      return x + outputs
+    elif self.output_arg + 1 > len(outputs):
+      raise ValueError()
+    else:  # multiple outputs.
+      res_outputs = list(outputs)
+      res_outputs[self.output_arg] = x + outputs[self.output_arg]
+      return tuple(res_outputs)
 
 
 class TokPosEmbedding(Layer):
@@ -271,8 +325,8 @@ class CharacterTokenizer:
       self.vocab += placeholders
     self.vocab_size = len(self.vocab)
 
-    self.ctoi = {c: i for i, c in enumerate(self.vocab)}
-    self.itoc = {i: c for i, c in enumerate(self.vocab)}
+    self.t2i = {t: i for i, t in enumerate(self.vocab)}
+    self.i2t = {i: t for i, t in enumerate(self.vocab)}
 
   def encode(self, text):
     """Convert the text to token-IDs.
@@ -282,7 +336,7 @@ class CharacterTokenizer:
 
     Returns: List[int]
     """
-    return [self.ctoi[c] for c in text]
+    return [self.get_id(c) for c in text]
   
   def decode(self, token_ids):
     """Inverse of encode.
@@ -292,7 +346,19 @@ class CharacterTokenizer:
 
     Returns: str
     """
-    return ''.join([self.itoc[i] for i in token_ids])
+    return ''.join([self.get_token(i) for i in token_ids])
+  
+  def get_id(self, token):
+    try:
+      return self.t2i[token]
+    except KeyError:
+      raise ValueError(f'Token "{token}" is out of vocabulary.')
+  
+  def get_token(self, id):
+    try:
+      return self.i2t[id]
+    except KeyError:
+      raise ValueError(f'ID {id} is out of vocabulary size.')
 
  
 class LanguageModelDataGenerator:
@@ -303,7 +369,6 @@ class LanguageModelDataGenerator:
 
   Args:
     token_ids: List[int]
-    auto_reset: bool
   """
   
   def __init__(self, token_ids):
@@ -316,6 +381,7 @@ class LanguageModelDataGenerator:
     Args:
       seq_len: int
         The length of the context, as a sequence of token-IDs.
+      auto_reset: bool
     
     Returns: (List[int], int)
 
@@ -336,3 +402,53 @@ class LanguageModelDataGenerator:
     target = self.token_ids[target_id]
     self.offset += 1
     return contexts, target
+
+
+class MaskedLanguageModelDataGenerator:
+  """Generate data for masked language model.
+
+  TODO
+
+  Args:
+    token_ids: List[int]
+    mask_token_id: int
+    get_mask_positions: Callable: List[int] -> List[int]
+  """
+  
+  def __init__(self, token_ids, mask_token_id, get_mask_positions):
+    self.token_ids = np.asarray(token_ids, dtype='int64')
+    self.mask_token_id = mask_token_id
+    self.get_mask_positions = get_mask_positions
+
+    self.offset = 0
+
+  def __call__(self, seq_len, auto_reset):
+    """Generates a context and a target.
+
+    Args:
+      seq_len: int
+        The length of the context, as a sequence of token-IDs.
+      auto_reset: bool
+    
+    Returns: (List[int], List[int])
+
+    Raises:
+      StopIteration: When `auto_reset = False` and all token-IDs has been
+        emitted.
+    """
+    end = self.offset + seq_len
+
+    if end > len(self.token_ids):
+      if auto_reset:
+        self.offset = 0
+        end = seq_len
+      else:
+        raise StopIteration()
+
+    # Notice that slicing does not copy the data, we have copy manually.
+    context = np.copy(self.token_ids[self.offset:end])
+    mask = self.get_mask_positions(context)
+    target = context[mask]
+    context[mask] = self.mask_token_id
+    self.offset += 1
+    return context, target, mask
