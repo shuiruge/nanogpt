@@ -181,8 +181,8 @@ class MultiHeadSelfAttention(Layer):
     key = self.multi_heads.split_heads(key)
     value = self.multi_heads.split_heads(value)
 
-    # Mask the self-communication.
     if mask is None:
+      # Mask the self-communication.
       seq_len = tf.shape(x)[-2]
       mask = tf.linalg.diag(tf.ones([seq_len]))
 
